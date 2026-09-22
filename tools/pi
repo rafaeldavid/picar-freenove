@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+# Talk to the car's Raspberry Pi. Override with PI_USER / PI_HOST / PI_IP.
+set -euo pipefail
+
+PI_USER="${PI_USER:-rafathebuilder}"
+PI_HOST="${PI_HOST:-raspberrypi.local}"
+PI_IP="${PI_IP:-}"                       # optional explicit address
+REMOTE_DIR="${REMOTE_DIR:-source}"       # package parent on the Pi; see AGENTS.md 3.1
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# -o ConnectTimeout: without it, ssh to a host that answers ARP but not TCP
+# hangs for ~2 minutes. Observed 2026-09-19.
+SSH_OPTS=(-o ConnectTimeout=8 -o BatchMode=no)
+ssh()  { command ssh  "${SSH_OPTS[@]}" "$@"; }
+scp()  { command scp  -o ConnectTimeout=8 "$@"; }
+
+# mDNS first, then an explicit PI_IP, then a sweep of whatever subnet THIS
+# machine is on. The subnet is derived, not hardcoded: the car has already
+# moved between 192.168.86.0/24 and 192.168.1.0/24, and a stale literal sends
+# you chasing a host that was never going to answer.
+find_by_mac() {
+  local me base
+  me="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)" || return 1
+  [ -n "$me" ] || return 1
+  base="${me%.*}"
+  for i in $(seq 1 254); do (ping -c1 -W 300 "$base.$i" >/dev/null 2>&1 &); done
+  sleep 6
+  # Raspberry Pi Foundation / Trading OUIs.
+  arp -an | grep -iE 'b8:27:eb|dc:a6:32|d8:3a:dd|2c:cf:67|e4:5f:1|28:cd:c1|98:fe:54' \
+    | grep -oE '\(([0-9]{1,3}\.){3}[0-9]{1,3}\)' | tr -d '()' | head -1
+}
+
+resolve() {
+  if ping -c1 -W 2000 "$PI_HOST" >/dev/null 2>&1; then echo "$PI_HOST"; return; fi
+  if [ -n "$PI_IP" ] && ping -c1 -W 2000 "$PI_IP" >/dev/null 2>&1; then echo "$PI_IP"; return; fi
+  echo "mDNS ($PI_HOST) did not answer; sweeping $(ipconfig getifaddr en0 2>/dev/null)/24 for a Pi..." >&2
+  local found; found="$(find_by_mac || true)"
+  if [ -n "$found" ]; then
+    echo "found a Raspberry Pi at $found" >&2
+    echo "$found"; return
+  fi
+  echo "no Raspberry Pi on this network. Is it powered, booted, and on the same" >&2
+  echo "Wi-Fi as this machine? (card config: see notes/HARDWARE.md)" >&2
+  return 1
+}
+
+TARGET=""
+need_pi() { local h; h="$(resolve)" || exit 1; TARGET="$PI_USER@$h"; }
+
+usage() {
+  cat <<'USAGE'
+usage: tools/pi <command> [args]
+
+  host                 report which address answers, and the Pi's model
+  shell                interactive ssh
+  run <cmd...>         run one command on the Pi
+  push                 rsync picar_freenove_fastapi/ to the Pi (no service restart)
+  push-tools           rsync tools/*.py to ~/diagnostics on the Pi
+  diag                 push-tools, run identify_hardware.py, save to notes/runs/
+  led-probe            push-tools, run led_bus_probe.py interactively (lights LEDs)
+  freenove-test <name> run Freenove's stock `sudo python test.py <name>`
+  verify-direction     spin each wheel and confirm the map  <- MOVES THE CAR
+  servo-probe <ch>     drive ONE servo channel (8=pan, 9=tilt) and watch the bus
+  camera-test          probe the CSI bus, capture a still, copy it back here
+  params [c] [p]       write Freenove's params.json (Connect, Pcb; default 2 2)
+  params-check         find every params.json on the Pi and print it
+  logs [n]             last n lines of the yakrobot-freenove journal (default 80)
+  stop                 stop the control service  <- the kill switch
+
+Env: PI_USER PI_HOST PI_IP REMOTE_DIR
+USAGE
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  host)
+    need_pi; t="$TARGET"
+    echo "$t"
+    ssh "$t" 'cat /sys/firmware/devicetree/base/model; echo; . /etc/os-release; echo "$PRETTY_NAME"; uname -r'
+    ;;
+  shell) need_pi; exec ssh "$TARGET" ;;
+  run)   need_pi; exec ssh "$TARGET" "$@" ;;
+
+  push)
+    need_pi; t="$TARGET"
+    ssh "$t" "mkdir -p ~/$REMOTE_DIR"
+    rsync -a --delete \
+      --exclude='.venv' --exclude='__pycache__' --exclude='.git' --exclude='.lgd-nfy*' \
+      "$HERE/picar_freenove_fastapi" "$t:~/$REMOTE_DIR/"
+    echo "pushed. Code on the Pi is NOT live until: tools/pi run 'sudo systemctl restart yakrobot-freenove'"
+    ;;
+
+  push-tools)
+    need_pi; t="$TARGET"
+    ssh "$t" 'mkdir -p ~/diagnostics'
+    rsync -a "$HERE/tools/"*.py "$t:~/diagnostics/"
+    echo "tools -> $t:~/diagnostics/"
+    ;;
+
+  diag)
+    need_pi; t="$TARGET"
+    "$0" push-tools >/dev/null
+    mkdir -p "$HERE/notes/runs"
+    out="$HERE/notes/runs/identify-$(date +%Y%m%d-%H%M%S).txt"
+    # Unbuffered so a hang shows how far it got.
+    ssh "$t" 'python3 -u ~/diagnostics/identify_hardware.py' 2>&1 | tee "$out"
+    echo
+    echo "saved: ${out/#$HOME/~}"
+    ;;
+
+  led-probe)
+    need_pi; t="$TARGET"
+    "$0" push-tools >/dev/null
+    # -t: the probe asks questions, so it needs a tty.
+    # sudo: the Connect-v1 path (rpi_ws281x on GPIO18) needs root, and the v2
+    # path works fine either way — so one sudo run exercises both.
+    exec ssh -t "$t" 'sudo python3 -u ~/diagnostics/led_bus_probe.py'
+    ;;
+
+  freenove-test)
+    [ $# -ge 1 ] || { echo "which test? e.g. Led, Ultrasonic, Infrared, ADC, Servo, Buzzer, Camera" >&2; exit 2; }
+    need_pi; exec ssh -t "$TARGET" \
+      "cd ~/Freenove_4WD_Smart_Car_Kit_for_Raspberry_Pi/Code/Server && sudo python test.py $1"
+    ;;
+
+  camera-test)
+    need_pi
+    # Nested here-docs rather than `python3 -c`: the scan needs both quote
+    # styles, and they do not survive ssh's shell layer intact.
+    # The kernel probes the CSI sensor ONCE at boot, so a re-seated ribbon shows
+    # no change until a reboot. Boot-time output is shown next to the live scan
+    # so a stale failure is not mistaken for a still-broken cable.
+    ssh "$TARGET" 'bash -s' <<'REMOTE'
+echo "--- sensor on the CSI bus (ov5647 answers at 0x36):"
+python3 - <<'PY'
+import smbus2
+bus = smbus2.SMBus(10)
+found = []
+for addr in range(0x03, 0x78):
+    try:
+        bus.read_byte(addr)
+        found.append(hex(addr))
+    except OSError:
+        pass
+bus.close()
+print("   ", found or "NOTHING - sensor unreachable")
+PY
+echo "--- what the driver said at boot:"
+dmesg | grep -i "ov5647\|unicam\|rp1-cfe" | tail -5 | sed "s/^/    /"
+echo "--- libcamera:"
+rpicam-hello --list-cameras 2>&1 | head -6 | sed "s/^/    /"
+REMOTE
+    echo "--- capture:"
+    # `timeout` matters: rpicam-jpeg can hang forever when the CSI data lanes
+    # are dead, and an orphaned one holds the camera so every later attempt
+    # fails with "Pipeline handler in use by another process" — a confusing
+    # second fault on top of the first. Observed 2026-09-21.
+    if ssh "$TARGET" 'timeout 25 rpicam-jpeg -n -t 2000 -o /tmp/camera-test.jpg >/dev/null 2>&1'; then
+      mkdir -p "$HERE/notes/runs"
+      scp -q "$TARGET:/tmp/camera-test.jpg" "$HERE/notes/runs/camera-test.jpg"
+      echo "    captured -> notes/runs/camera-test.jpg"
+      echo "    Check it is in focus, the right way up, and not all black."
+    else
+      # Distinguish the two failures. They need the same physical fix but
+      # look nothing alike, and conflating them sends you checking config.
+      if ssh "$TARGET" 'rpicam-hello --list-cameras 2>/dev/null | grep -q ov5647'; then
+        echo "    no capture, but the sensor IS enumerated."
+        echo "    That means its I2C control lines work while the high-speed CSI"
+        echo "    data lanes do not — libcamera reports 'frontend has timed out'."
+        echo "    A partially-seated ribbon does exactly this."
+      else
+        echo "    no capture, and the sensor does not enumerate at all."
+      fi
+      echo "    Power down, re-seat the ribbon at BOTH ends, then boot:"
+      echo "      tools/pi run 'sudo shutdown -h now'   (CSI is probed only at boot)"
+      echo "    Leftover rpicam processes holding the camera:"
+      ssh "$TARGET" 'pgrep -a rpicam 2>/dev/null | sed "s/^/      /"' || true
+    fi
+    ;;
+
+  verify-direction)
+    need_pi
+    "$0" push-tools >/dev/null
+    # -t for the questions; run from ~/source so the package imports, and use
+    # the venv's python so picamera2/lgpio from apt are visible.
+    exec ssh -t "$TARGET" "cd ~/source && \
+      picar_freenove_fastapi/.venv/bin/python -u ~/diagnostics/verify_direction.py $*"
+    ;;
+
+  servo-probe)
+    [ $# -ge 1 ] || { echo "which channel? 8 = pan, 9 = tilt" >&2; exit 2; }
+    need_pi
+    "$0" push-tools >/dev/null
+    ch="$1"; shift
+    exec ssh -t "$TARGET" "sudo python3 -u ~/diagnostics/servo_probe.py $ch $*"
+    ;;
+
+  params)
+    need_pi
+    c="${1:-2}"; p="${2:-2}"
+    # Written non-interactively on purpose. parameter.py's prompt writes to the
+    # CURRENT directory, so running it from the wrong place leaves a second,
+    # disagreeing params.json. Pi_Version is derived on the Pi; led.py ignores
+    # the stored value and re-detects, but validate_params() rejects the whole
+    # file unless the key is present and 1 or 2.
+    # sudo, and -t for the password prompt: an existing params.json is owned by
+    # root, because it was created by `sudo python test.py`. Chown it back
+    # afterwards — root can still write a user-owned file, so the sudo tests
+    # keep working, while nano and non-sudo runs stop failing.
+    ssh -t "$TARGET" "cd ~/Freenove_4WD_Smart_Car_Kit_for_Raspberry_Pi/Code/Server && \
+      sudo python3 -c \"
+import json
+model = open('/sys/firmware/devicetree/base/model').read()
+pi = 2 if 'Raspberry Pi 5' in model else 1
+json.dump({'Connect_Version': $c, 'Pcb_Version': $p, 'Pi_Version': pi},
+          open('params.json','w'), indent=4)
+print('model:', model.strip(chr(0)))
+\" && sudo chown \$(id -u):\$(id -g) params.json && cat params.json"
+    echo "wrote Connect_Version=$c Pcb_Version=$p (file now owned by you)"
+    ;;
+
+  params-check)
+    need_pi
+    ssh "$TARGET" 'for f in $(find ~ -name params.json 2>/dev/null); do
+                     echo "--- $f  ($(stat -c "%U:%G %a" "$f"))"; cat "$f"; echo; done
+                   echo "(if more than one is listed, they can disagree)"'
+    ;;
+
+  logs)  need_pi; exec ssh "$TARGET" "sudo journalctl -u yakrobot-freenove -n ${1:-80} -o short-precise --no-pager" ;;
+  stop)  need_pi; exec ssh "$TARGET" 'sudo systemctl stop yakrobot-freenove && echo stopped' ;;
+
+  ""|-h|--help|help) usage ;;
+  *) echo "unknown command: $cmd" >&2; usage >&2; exit 2 ;;
+esac

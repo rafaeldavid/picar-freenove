@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Serve the cover viewer locally.
+#
+# Rooted at the WORKSPACE, not viewer/, because the page loads
+# cover/freenove-top-cover.stl directly — the same file the printer gets, so the
+# render can never drift from the part.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORT="${PORT:-8000}"
+
+cd "$HERE"
+[ -f viewer/car.glb ] || {
+  echo "viewer/car.glb missing — regenerate with:" >&2
+  echo "  tools/step2glb.py cad_design/FNK0043_3D.STEP viewer/car.glb 0.6" >&2
+  exit 1
+}
+[ -f cover/freenove-top-cover.stl ] || {
+  echo "cover STL missing — run:" >&2
+  echo "  tools/cadenv/bin/python cover/build_cover.py" >&2
+  exit 1
+}
+
+# A port is "taken" if something accepts a connection on it. bash's /dev/tcp
+# keeps this dependency-free.
+taken() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+# 8000 is a popular default and is often already in use. This script used to
+# announce the URL and open a browser BEFORE binding, so a busy port produced a
+# confident link to somebody else's server followed by a raw Python traceback.
+# Find a free port first, and say which one.
+if taken "$PORT"; then
+  START="$PORT"
+  for _ in $(seq 1 30); do
+    PORT=$((PORT + 1))
+    taken "$PORT" || break
+  done
+  if taken "$PORT"; then
+    echo "no free port in ${START}..${PORT}; set PORT=<n> and retry" >&2
+    exit 1
+  fi
+  echo "note: port $START is in use by something else — using $PORT instead"
+fi
+
+python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
+SERVER=$!
+trap 'kill "$SERVER" 2>/dev/null || true' EXIT INT TERM
+
+# Only announce and open once it is actually answering. Handing over a link
+# that 404s for the first second reads as a broken viewer, not a slow one.
+for _ in $(seq 1 40); do
+  taken "$PORT" && break
+  sleep 0.1
+done
+taken "$PORT" || { echo "server failed to start on $PORT" >&2; exit 1; }
+
+URL="http://localhost:$PORT/viewer/"
+echo "$URL   (ctrl-C to stop)"
+command -v open >/dev/null && open "$URL" || true
+
+wait "$SERVER"
