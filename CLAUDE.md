@@ -77,7 +77,10 @@ tools/step2glb.py IN OUT [mm]  tessellate a STEP into glTF (needs cadquery-ocp)
 `tools/pi` falls back from `raspberrypi.local` to the last known IP, because
 mDNS fails while the Pi is booting and the resulting hang looks like a dead Pi.
 
-## Where things stand (2026-08-27)
+## Where things stand
+
+**Start with `notes/HANDOFF.md`** — current state, open items, and the
+traps. This section is the bring-up history. (2026-08-27)
 
 **Bring-up is complete.** Every Freenove module test passes except `ADC`, and
 the camera captures at full resolution. Full history in `notes/HARDWARE.md`;
