@@ -7,6 +7,24 @@ Read this first. `HARDWARE.md` is the forensic detail; this is the state.
     PiCar-Berlin-01, agent 9320 on Base Sepolia
     https://picar-freenove-01.yakrover.online/picar_freenove/ui2
 
+`/ui` 307-redirects to `/ui2` (`CONSOLE_REDIRECT_TO_UI2=1`), carrying the query
+string so a `?token=` survives the hop. The video console is still there if the
+flag is unset.
+
+**Teleop is free**: both payment gates are off, so anyone with the link takes a
+5-minute turn.
+
+There is also an **admin bypass**: a static entry in the gateway's `MCP_TOKENS`,
+passed as `?token=<word>`, which skips the lease entirely and holds the robot
+for as long as the socket is open. **The word itself is deliberately not written
+down here — this repo is public.** Read it from `MCP_TOKENS` in the gateway's
+`.env` (0600, gitignored, `~/robots/yakrobot-gateway`).
+
+It is a short memorable word chosen for a demo, which is fine while teleop is
+free and is not fine once a payment gate is on — it becomes a free ride for
+anyone who guesses it. `MCP_TOKENS_FILE` hot-reloads, so it can be revoked
+without restarting the gateway.
+
 Three processes keep that link alive, and all three now come back on their own:
 
 | | where | managed by |
