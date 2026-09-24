@@ -55,6 +55,19 @@ unattended, either stop the Mac sleeping or move the gateway onto the Pi.
 The gateway is **not** under `~/Documents`: macOS TCC blocks launchd agents from
 that folder, which is what forced the move. Do not move it back.
 
+## The robot is not on this network
+
+The Pi lives at the robotics office; this Mac has since moved to
+192.168.2.0/24. So the public URL serves the console and the descriptor
+perfectly while the drive socket 502s — the gateway simply cannot reach the
+car. **That is location, not breakage.** `tools/pi` derives the subnet from
+whichever network this machine is on, so it will find the Pi again once they
+are on the same one.
+
+`PICAR_FREENOVE_URL` still lists `192.168.1.16` from the previous network. mDNS
+(`raspberrypi.local`) is first in the list and is what actually resolves, so the
+stale IP is harmless — but it is stale.
+
 ## Open items, in the order that matters
 
 1. **`motor_channels` is derived, not measured.** Parsed out of Freenove's
