@@ -1,4 +1,8 @@
-# Where things stand — 2026-09-22
+# Where things stand — 2026-09-24
+
+> Published at <https://github.com/rafaeldavid/picar-freenove> (public). The
+> gateway's own work is **local only** — three branches on this Mac, no push
+> access to `pi-drg/yakrobot-gateway` and no fork made. See "Open items".
 
 Read this first. `HARDWARE.md` is the forensic detail; this is the state.
 
@@ -11,8 +15,11 @@ Read this first. `HARDWARE.md` is the forensic detail; this is the state.
 string so a `?token=` survives the hop. The video console is still there if the
 flag is unset.
 
-**Teleop is free**: both payment gates are off, so anyone with the link takes a
-5-minute turn.
+**Teleop is CARD-PAID**: the Stripe gate is on at $1.00 for 5 minutes, pointed
+at a local fake Stripe (`com.yakrobot.fakestripe`, port 8193) so the flow runs
+with no account, no key and no money — "paying" is following a redirect. For a
+real checkout page, drop `STRIPE_API_BASE` and set a real `sk_test_` key.
+Enabling the gate turned **free teleop off**; there is no fallback.
 
 There is also an **admin bypass**: a static entry in the gateway's `MCP_TOKENS`,
 passed as `?token=<word>`, which skips the lease entirely and holds the robot
@@ -59,11 +66,13 @@ that folder, which is what forced the move. Do not move it back.
     modes, but the CSI data lanes deliver nothing — `frontend has timed out`.
     Survived two reseats. Next step is a replacement 15-pin FPC, a couple of
     euros. Everything else on the car works.
-3. **Two branches on the gateway, neither pushed.**
+3. **Three gateway branches, local to this Mac only.** There is no push access
+    to `pi-drg/yakrobot-gateway` (`push=false`) and no fork was made, so this
+    work exists nowhere else — a disk failure loses it.
     `fix/tunnel-ipv6-and-descriptor-error` — three upstream bug fixes, PR-ready,
-    Discord message already drafted for Anuraj.
-    `feature/trace-console-no-camera` — the /ui2 console, plus a second commit
-    of local-only scripts that should NOT go upstream.
+    Discord message drafted for Anuraj.
+    `feature/trace-console-no-camera` — the /ui2 console and the card gate, plus
+    a second commit of local-only scripts that should NOT go upstream.
 4. **launchd for the Mac is done; sleep is not.** See above.
 
 ## Things that will waste your time if you forget them
