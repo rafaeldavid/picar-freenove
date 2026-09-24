@@ -1,8 +1,10 @@
 # Where things stand — 2026-09-24
 
-> Published at <https://github.com/rafaeldavid/picar-freenove> (public). The
-> gateway's own work is **local only** — three branches on this Mac, no push
-> access to `pi-drg/yakrobot-gateway` and no fork made. See "Open items".
+> Everything is pushed:
+> - <https://github.com/rafaeldavid/picar-freenove> (public) — this workspace
+> - <https://github.com/rafaeldavid/yakrobot-gateway> (public fork of
+>   `pi-drg/yakrobot-gateway`, which is read-only for this account) — carries
+>   `fix/tunnel-ipv6-and-descriptor-error` and `feature/trace-console-no-camera`
 
 Read this first. `HARDWARE.md` is the forensic detail; this is the state.
 
@@ -66,13 +68,12 @@ that folder, which is what forced the move. Do not move it back.
     modes, but the CSI data lanes deliver nothing — `frontend has timed out`.
     Survived two reseats. Next step is a replacement 15-pin FPC, a couple of
     euros. Everything else on the car works.
-3. **Three gateway branches, local to this Mac only.** There is no push access
-    to `pi-drg/yakrobot-gateway` (`push=false`) and no fork was made, so this
-    work exists nowhere else — a disk failure loses it.
-    `fix/tunnel-ipv6-and-descriptor-error` — three upstream bug fixes, PR-ready,
-    Discord message drafted for Anuraj.
-    `feature/trace-console-no-camera` — the /ui2 console and the card gate, plus
-    a second commit of local-only scripts that should NOT go upstream.
+3. **The PR to Anuraj has not been opened.** Both branches are on the fork.
+    `fix/tunnel-ipv6-and-descriptor-error` is the one to propose upstream —
+    three bug fixes, and the Discord message is already drafted.
+    `feature/trace-console-no-camera` carries the /ui2 console and the card
+    gate, plus a second commit of local-only scripts that should NOT go
+    upstream; a PR from it should cherry-pick the first commit only.
 4. **launchd for the Mac is done; sleep is not.** See above.
 
 ## Things that will waste your time if you forget them
